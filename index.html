@@ -1,0 +1,430 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>HTML2MD — HTML to Markdown Converter</title>
+<style>
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+:root{
+  --bg:#0a0e17;--surface:#111827;--border:#1e293b;--text:#e2e8f0;
+  --muted:#64748b;--accent:#06b6d4;--accent-hover:#22d3ee;
+  --green:#10b981;--yellow:#f59e0b;--red:#ef4444;
+  --font-mono:'Courier New',Consolas,monospace;
+  --font-sans:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;
+  --radius:8px;
+}
+html,body{height:100%;font-family:var(--font-sans);background:var(--bg);color:var(--text)}
+
+/* Layout */
+.app{display:flex;flex-direction:column;height:100vh}
+.toolbar{
+  display:flex;align-items:center;gap:12px;padding:10px 16px;
+  background:var(--surface);border-bottom:1px solid var(--border);
+  flex-wrap:wrap;
+}
+.toolbar h1{font-size:18px;font-weight:700;color:var(--accent);white-space:nowrap}
+.toolbar h1 span{color:var(--muted);font-weight:400;font-size:13px;margin-left:6px}
+.toolbar-options{display:flex;gap:14px;align-items:center;flex-wrap:wrap;margin-left:auto}
+.toolbar-options label{
+  display:flex;align-items:center;gap:5px;font-size:12px;color:var(--muted);
+  cursor:pointer;user-select:none;white-space:nowrap;
+}
+.toolbar-options input[type="checkbox"]{
+  accent-color:var(--accent);width:14px;height:14px;cursor:pointer;
+}
+
+.panes{display:flex;flex:1;overflow:hidden}
+.pane{
+  flex:1;display:flex;flex-direction:column;overflow:hidden;
+  border-right:1px solid var(--border);
+}
+.pane:last-child{border-right:none}
+.pane-header{
+  display:flex;align-items:center;justify-content:space-between;
+  padding:8px 14px;background:var(--surface);border-bottom:1px solid var(--border);
+  font-size:13px;font-weight:600;color:var(--muted);
+}
+.pane-header button{
+  background:transparent;border:1px solid var(--border);color:var(--muted);
+  padding:4px 10px;border-radius:4px;font-size:11px;cursor:pointer;
+  transition:all .15s;
+}
+.pane-header button:hover{border-color:var(--accent);color:var(--accent)}
+
+textarea,pre{
+  flex:1;padding:14px;font-family:var(--font-mono);font-size:13px;
+  line-height:1.6;resize:none;overflow:auto;border:none;outline:none;
+  background:var(--bg);color:var(--text);tab-size:2;
+}
+textarea::placeholder{color:var(--muted)}
+pre{white-space:pre-wrap;word-wrap:break-word}
+
+/* Drop overlay */
+.drop-zone{position:relative}
+.drop-overlay{
+  position:absolute;inset:0;background:rgba(6,182,212,.08);
+  border:2px dashed var(--accent);display:none;
+  align-items:center;justify-content:center;z-index:10;
+  pointer-events:none;
+}
+.drop-overlay.active{display:flex}
+.drop-overlay span{
+  font-size:15px;font-weight:600;color:var(--accent);
+  background:var(--surface);padding:10px 20px;border-radius:var(--radius);
+}
+
+/* Toast */
+.toast{
+  position:fixed;bottom:20px;right:20px;background:var(--green);
+  color:#fff;padding:8px 16px;border-radius:var(--radius);font-size:13px;
+  font-weight:600;opacity:0;transform:translateY(10px);
+  transition:all .25s;pointer-events:none;z-index:100;
+}
+.toast.show{opacity:1;transform:translateY(0)}
+
+/* Footer */
+footer{
+  padding:8px 16px;text-align:center;font-size:11px;color:var(--muted);
+  background:var(--surface);border-top:1px solid var(--border);
+}
+footer a{color:var(--accent);text-decoration:none}
+footer a:hover{text-decoration:underline}
+
+/* Mobile */
+@media(max-width:768px){
+  .panes{flex-direction:column}
+  .pane{border-right:none;border-bottom:1px solid var(--border)}
+  .pane:last-child{border-bottom:none}
+  .toolbar{flex-direction:column;align-items:flex-start;gap:8px}
+  .toolbar-options{margin-left:0}
+}
+</style>
+</head>
+<body>
+<div class="app">
+  <div class="toolbar">
+    <h1>HTML2MD <span>HTML to Markdown</span></h1>
+    <div class="toolbar-options">
+      <label><input type="checkbox" id="optLineBreaks"> Preserve line breaks</label>
+      <label><input type="checkbox" id="optAltText" checked> Include image alt text</label>
+      <label><input type="checkbox" id="optStripAttrs" checked> Strip classes/IDs</label>
+    </div>
+  </div>
+
+  <div class="panes">
+    <div class="pane drop-zone" id="inputPane">
+      <div class="pane-header">
+        <span>HTML Input</span>
+        <button id="btnClear">Clear</button>
+      </div>
+      <textarea id="htmlInput" placeholder="Paste HTML here, or drag and drop an .html file..." spellcheck="false"></textarea>
+      <div class="drop-overlay" id="dropOverlay"><span>Drop .html file here</span></div>
+    </div>
+
+    <div class="pane">
+      <div class="pane-header">
+        <span>Markdown Output</span>
+        <button id="btnCopy">Copy</button>
+      </div>
+      <pre id="mdOutput"></pre>
+    </div>
+  </div>
+
+  <footer>Built by <a href="#">Rocket Labs AI</a></footer>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+const htmlInput = document.getElementById('htmlInput');
+const mdOutput = document.getElementById('mdOutput');
+const btnCopy = document.getElementById('btnCopy');
+const btnClear = document.getElementById('btnClear');
+const dropOverlay = document.getElementById('dropOverlay');
+const inputPane = document.getElementById('inputPane');
+const toast = document.getElementById('toast');
+const optLineBreaks = document.getElementById('optLineBreaks');
+const optAltText = document.getElementById('optAltText');
+const optStripAttrs = document.getElementById('optStripAttrs');
+
+function showToast(msg) {
+  toast.textContent = msg;
+  toast.classList.add('show');
+  setTimeout(() => toast.classList.remove('show'), 1800);
+}
+
+function htmlToMarkdown(html) {
+  const preserveBreaks = optLineBreaks.checked;
+  const includeAlt = optAltText.checked;
+
+  const parser = new DOMParser();
+  const doc = parser.parseFromString(html, 'text/html');
+
+  function processNode(node) {
+    if (node.nodeType === Node.TEXT_NODE) {
+      let text = node.textContent;
+      if (!preserveBreaks) {
+        text = text.replace(/\n/g, ' ');
+      }
+      return text;
+    }
+    if (node.nodeType !== Node.ELEMENT_NODE) return '';
+
+    const tag = node.tagName.toLowerCase();
+    const children = () => Array.from(node.childNodes).map(processNode).join('');
+    const childText = children();
+
+    switch (tag) {
+      case 'h1': return '\n\n# ' + childText.trim() + '\n\n';
+      case 'h2': return '\n\n## ' + childText.trim() + '\n\n';
+      case 'h3': return '\n\n### ' + childText.trim() + '\n\n';
+      case 'h4': return '\n\n#### ' + childText.trim() + '\n\n';
+      case 'h5': return '\n\n##### ' + childText.trim() + '\n\n';
+      case 'h6': return '\n\n###### ' + childText.trim() + '\n\n';
+
+      case 'p': return '\n\n' + childText.trim() + '\n\n';
+
+      case 'strong':
+      case 'b':
+        return '**' + childText + '**';
+
+      case 'em':
+      case 'i':
+        return '*' + childText + '*';
+
+      case 'del':
+      case 's':
+        return '~~' + childText + '~~';
+
+      case 'a': {
+        const href = node.getAttribute('href') || '';
+        const title = node.getAttribute('title');
+        if (title) return '[' + childText + '](' + href + ' "' + title + '")';
+        return '[' + childText + '](' + href + ')';
+      }
+
+      case 'img': {
+        const src = node.getAttribute('src') || '';
+        const alt = includeAlt ? (node.getAttribute('alt') || '') : '';
+        return '![' + alt + '](' + src + ')';
+      }
+
+      case 'br':
+        return preserveBreaks ? '  \n' : '\n';
+
+      case 'hr':
+        return '\n\n---\n\n';
+
+      case 'blockquote':
+        return '\n\n' + childText.trim().split('\n').map(l => '> ' + l).join('\n') + '\n\n';
+
+      case 'pre': {
+        const codeEl = node.querySelector('code');
+        const lang = codeEl ? (codeEl.className.match(/language-(\w+)/) || [])[1] || '' : '';
+        const code = codeEl ? codeEl.textContent : node.textContent;
+        return '\n\n```' + lang + '\n' + code.replace(/\n$/, '') + '\n```\n\n';
+      }
+
+      case 'code': {
+        if (node.parentElement && node.parentElement.tagName.toLowerCase() === 'pre') {
+          return node.textContent;
+        }
+        return '`' + node.textContent + '`';
+      }
+
+      case 'ul': {
+        const items = Array.from(node.children)
+          .filter(c => c.tagName && c.tagName.toLowerCase() === 'li')
+          .map(li => '- ' + processNode(li).trim().replace(/\n/g, '\n  '));
+        return '\n\n' + items.join('\n') + '\n\n';
+      }
+
+      case 'ol': {
+        let idx = 0;
+        const items = Array.from(node.children)
+          .filter(c => c.tagName && c.tagName.toLowerCase() === 'li')
+          .map(li => {
+            idx++;
+            return idx + '. ' + processNode(li).trim().replace(/\n/g, '\n   ');
+          });
+        return '\n\n' + items.join('\n') + '\n\n';
+      }
+
+      case 'li':
+        return childText;
+
+      case 'table': {
+        const rows = [];
+        const allRows = node.querySelectorAll('tr');
+        allRows.forEach((tr, ri) => {
+          const cells = Array.from(tr.querySelectorAll('th, td')).map(c => processNode(c).trim());
+          rows.push('| ' + cells.join(' | ') + ' |');
+          if (ri === 0) {
+            rows.push('| ' + cells.map(() => '---').join(' | ') + ' |');
+          }
+        });
+        return '\n\n' + rows.join('\n') + '\n\n';
+      }
+
+      case 'thead':
+      case 'tbody':
+      case 'tfoot':
+      case 'tr':
+      case 'th':
+      case 'td':
+        return childText;
+
+      case 'input': {
+        if (node.getAttribute('type') === 'checkbox') {
+          return node.checked ? '[x] ' : '[ ] ';
+        }
+        return '';
+      }
+
+      case 'sup': return '<sup>' + childText + '</sup>';
+      case 'sub': return '<sub>' + childText + '</sub>';
+
+      // Tags to strip, keeping content
+      case 'div':
+      case 'span':
+      case 'section':
+      case 'article':
+      case 'main':
+      case 'header':
+      case 'footer':
+      case 'nav':
+      case 'aside':
+      case 'figure':
+      case 'figcaption':
+      case 'details':
+      case 'summary':
+      case 'mark':
+      case 'small':
+      case 'abbr':
+      case 'cite':
+      case 'time':
+      case 'address':
+      case 'label':
+      case 'form':
+      case 'fieldset':
+      case 'legend':
+      case 'dl':
+      case 'dt':
+      case 'dd':
+      case 'ruby':
+      case 'rt':
+      case 'rp':
+      case 'bdi':
+      case 'bdo':
+      case 'wbr':
+      case 'u':
+      case 'ins':
+        return childText;
+
+      // Tags to drop entirely
+      case 'script':
+      case 'style':
+      case 'noscript':
+      case 'iframe':
+      case 'object':
+      case 'embed':
+      case 'svg':
+      case 'canvas':
+      case 'video':
+      case 'audio':
+      case 'source':
+      case 'track':
+      case 'map':
+      case 'area':
+        return '';
+
+      default:
+        return childText;
+    }
+  }
+
+  let md = processNode(doc.body);
+
+  // Clean up excessive blank lines
+  md = md.replace(/\n{3,}/g, '\n\n');
+  md = md.trim();
+
+  return md;
+}
+
+function convert() {
+  const raw = htmlInput.value;
+  if (!raw.trim()) {
+    mdOutput.textContent = '';
+    return;
+  }
+  mdOutput.textContent = htmlToMarkdown(raw);
+}
+
+// Live conversion
+htmlInput.addEventListener('input', convert);
+
+// Re-convert when options change
+optLineBreaks.addEventListener('change', convert);
+optAltText.addEventListener('change', convert);
+optStripAttrs.addEventListener('change', convert);
+
+// Copy
+btnCopy.addEventListener('click', () => {
+  const text = mdOutput.textContent;
+  if (!text) return;
+  navigator.clipboard.writeText(text).then(() => showToast('Copied to clipboard'));
+});
+
+// Clear
+btnClear.addEventListener('click', () => {
+  htmlInput.value = '';
+  mdOutput.textContent = '';
+  htmlInput.focus();
+});
+
+// Drag and drop
+let dragCounter = 0;
+
+inputPane.addEventListener('dragenter', (e) => {
+  e.preventDefault();
+  dragCounter++;
+  dropOverlay.classList.add('active');
+});
+
+inputPane.addEventListener('dragleave', (e) => {
+  e.preventDefault();
+  dragCounter--;
+  if (dragCounter === 0) dropOverlay.classList.remove('active');
+});
+
+inputPane.addEventListener('dragover', (e) => {
+  e.preventDefault();
+});
+
+inputPane.addEventListener('drop', (e) => {
+  e.preventDefault();
+  dragCounter = 0;
+  dropOverlay.classList.remove('active');
+
+  const files = e.dataTransfer.files;
+  if (files.length === 0) return;
+
+  const file = files[0];
+  if (!file.name.endsWith('.html') && !file.name.endsWith('.htm') && file.type !== 'text/html') {
+    showToast('Please drop an .html file');
+    return;
+  }
+
+  const reader = new FileReader();
+  reader.onload = (ev) => {
+    htmlInput.value = ev.target.result;
+    convert();
+    showToast('File loaded: ' + file.name);
+  };
+  reader.readAsText(file);
+});
+</script>
+</body>
+</html>
